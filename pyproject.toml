@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bit"
+version = "0.1.0"
+description = "A BERT-based yes/no/idk classifier for BoolQ_3L"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "torch==2.14.1",
+    "transformers==5.20.2",
+    "scikit-learn==1.9.1",
+]
+
+[project.scripts]
+bit-train = "train.train:train"
+bit-chat = "chat.chat:main"
+
+[tool.setuptools]
+py-modules = ["bit_model"]
+packages = ["train", "chat"]
