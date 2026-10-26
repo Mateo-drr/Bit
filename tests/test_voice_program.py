@@ -4,6 +4,8 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,12 +14,20 @@ import numpy as np
 
 import program
 from program import config, speech
-from program.audio import RecordSettings, record_blocks
+from program.audio import (
+    AudioError,
+    Recorder,
+    RecordSettings,
+    format_audio_devices,
+    play,
+    record_blocks,
+)
 from program.speech import Speaker, Transcriber
 from program.voice_chat import (
     build_parser,
     conversation_loop,
     is_quit_command,
+    main,
     spoken_answer,
 )
 
@@ -81,6 +91,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             set(data["project"]["optional-dependencies"]["voice"]),
             {
+                "numpy==2.5.4",
                 "sounddevice==0.5.6",
                 "faster-whisper==1.2.1",
                 "piper-tts==1.8.0",
@@ -89,13 +100,24 @@ class ConfigTests(unittest.TestCase):
 
     def test_voice_program_forces_local_hf_cache(self):
         project_root = Path(__file__).resolve().parents[1]
-        env = {key: value for key, value in os.environ.items() if key != "HF_HOME"}
-        env["HF_HOME"] = str(project_root / "wrong-cache")
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE"}
+        }
+        env["HF_HOME"] = str(project_root / "wrong-home")
+        env["HF_HUB_CACHE"] = str(project_root / "wrong-hub")
+        env["TRANSFORMERS_CACHE"] = str(project_root / "wrong-legacy")
         result = subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "import os, program.config; print(os.environ['HF_HOME'])",
+                (
+                    "import os, program.config; "
+                    "print(os.environ['HF_HOME']); "
+                    "print(os.environ['HF_HUB_CACHE']); "
+                    "print(os.environ.get('TRANSFORMERS_CACHE', ''))"
+                ),
             ],
             cwd=project_root,
             env=env,
@@ -103,7 +125,10 @@ class ConfigTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(result.stdout.strip(), str(config.HF_ROOT))
+        home, hub, legacy = result.stdout.splitlines()
+        self.assertEqual(home, str(config.HF_ROOT))
+        self.assertEqual(hub, str(config.HF_ROOT / "hub"))
+        self.assertEqual(legacy, "")
 
 
 def make_blocks(seconds, amplitude, settings):
@@ -160,6 +185,75 @@ class AudioTests(unittest.TestCase):
         audio = record_blocks(blocks, settings)
         self.assertEqual(audio.size, 0)
 
+    def test_calibration_failure_reports_device_hint(self):
+        class FakePortAudioError(Exception):
+            pass
+
+        class BrokenInputStream:
+            def __init__(self, **kwargs):
+                raise FakePortAudioError(
+                    "Error opening InputStream: No such file or directory"
+                )
+
+        fake_sd = SimpleNamespace(
+            PortAudioError=FakePortAudioError,
+            InputStream=BrokenInputStream,
+        )
+        recorder = Recorder(RecordSettings(), device=24)
+        with mock.patch.dict(sys.modules, {"sounddevice": fake_sd}):
+            with self.assertRaises(AudioError) as raised:
+                recorder.calibrate()
+
+        message = str(raised.exception)
+        self.assertIn("device 24", message)
+        self.assertIn("--list-audio-devices", message)
+        self.assertIn("--input-device INDEX", message)
+        self.assertIn("16 kHz", message)
+        self.assertIn("No such file or directory", message)
+
+    def test_playback_failure_becomes_audio_error(self):
+        class FakePortAudioError(Exception):
+            pass
+
+        fake_sd = SimpleNamespace(
+            PortAudioError=FakePortAudioError,
+            play=mock.Mock(side_effect=FakePortAudioError("device lost")),
+            wait=mock.Mock(),
+        )
+        with mock.patch.dict(sys.modules, {"sounddevice": fake_sd}):
+            with self.assertRaises(AudioError) as raised:
+                play(np.ones(16, dtype=np.float32), 16000, device=3)
+
+        message = str(raised.exception)
+        self.assertIn("output device 3", message)
+        self.assertIn("device lost", message)
+        self.assertIn("--output-device INDEX", message)
+
+    def test_device_query_failure_becomes_audio_error(self):
+        class FakePortAudioError(Exception):
+            pass
+
+        fake_sd = SimpleNamespace(
+            PortAudioError=FakePortAudioError,
+            default=SimpleNamespace(device=(0, 1)),
+            query_devices=mock.Mock(
+                side_effect=FakePortAudioError("no audio devices")
+            ),
+        )
+        with mock.patch.dict(sys.modules, {"sounddevice": fake_sd}):
+            with self.assertRaises(AudioError) as raised:
+                format_audio_devices()
+
+        self.assertIn("Could not query audio devices", str(raised.exception))
+        self.assertIn("no audio devices", str(raised.exception))
+
+    def test_missing_sounddevice_reports_install_hint(self):
+        with mock.patch.dict(sys.modules, {"sounddevice": None}):
+            with self.assertRaises(AudioError) as raised:
+                Recorder(RecordSettings()).calibrate()
+
+        self.assertIn("pip install -e '.[voice]'", str(raised.exception))
+
 
 class FakeWhisperModel:
     def __init__(self, segments):
@@ -205,6 +299,8 @@ class SpeechTests(unittest.TestCase):
         transcriber = Transcriber(device="auto", model_factory=factory)
         transcriber.ensure_loaded()
         self.assertEqual(calls, [("auto", "default"), ("cpu", "int8")])
+        self.assertEqual(transcriber.device, "cpu")
+        self.assertEqual(transcriber.compute_type, "int8")
 
     def test_speaker_concatenates_chunks(self):
         voice = SimpleNamespace(
@@ -364,6 +460,59 @@ class VoiceChatTests(unittest.TestCase):
         self.assertAlmostEqual(args.silence_seconds, 0.8)
         self.assertAlmostEqual(args.max_seconds, 15.0)
         self.assertIsNone(args.threshold)
+
+    def test_main_setup_interrupt_exits_cleanly(self):
+        stdout = StringIO()
+        stderr = StringIO()
+        with mock.patch(
+            "program.voice_chat.resolve_model_dir", side_effect=KeyboardInterrupt
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main([])
+
+        self.assertEqual(result, 130)
+        self.assertEqual(stdout.getvalue(), "\nGoodbye.\n")
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertNotIn("Traceback", stdout.getvalue() + stderr.getvalue())
+
+    def test_main_list_audio_devices_reports_audio_error(self):
+        stderr = StringIO()
+        with mock.patch(
+            "program.voice_chat.format_audio_devices",
+            side_effect=AudioError("no audio devices"),
+        ):
+            with redirect_stderr(stderr):
+                result = main(["--list-audio-devices"])
+
+        self.assertEqual(result, 1)
+        self.assertIn("no audio devices", stderr.getvalue())
+
+    def test_calibration_runs_before_speech_models_and_fails_fast(self):
+        recorder = mock.Mock()
+        recorder.calibrate.side_effect = AudioError("microphone failed")
+        transcriber = mock.Mock()
+        speaker = mock.Mock()
+        stderr = StringIO()
+        with (
+            mock.patch(
+                "program.voice_chat.resolve_model_dir",
+                return_value=Path("/model"),
+            ),
+            mock.patch("program.voice_chat.ChatConfig"),
+            mock.patch("program.voice_chat.Bit", return_value=FakeBit()),
+            mock.patch("program.voice_chat.Recorder", return_value=recorder),
+            mock.patch("program.voice_chat.Transcriber", return_value=transcriber),
+            mock.patch("program.voice_chat.Speaker", return_value=speaker),
+            redirect_stdout(StringIO()),
+            redirect_stderr(stderr),
+        ):
+            result = main([])
+
+        self.assertEqual(result, 1)
+        recorder.calibrate.assert_called_once_with()
+        transcriber.ensure_loaded.assert_not_called()
+        speaker.ensure_loaded.assert_not_called()
+        self.assertIn("microphone failed", stderr.getvalue())
 
 
 if __name__ == "__main__":

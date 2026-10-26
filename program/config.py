@@ -16,6 +16,9 @@ VOICE_INSTALL_HINT = (
 
 # Set before transformers is imported so the Bit backbone is cached locally.
 os.environ["HF_HOME"] = str(HF_ROOT)
+os.environ["HF_HUB_CACHE"] = str(HF_ROOT / "hub")
+# Ignore the legacy cache variable so an inherited value cannot relocate assets.
+os.environ.pop("TRANSFORMERS_CACHE", None)
 
 
 def resolve_model_dir(

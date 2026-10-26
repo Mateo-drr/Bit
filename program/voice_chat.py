@@ -23,7 +23,6 @@ from program.speech import (
     DEFAULT_WHISPER_MODEL,
     Speaker,
     Transcriber,
-    missing_dependency_error,
 )
 
 SPOKEN_ANSWERS = {"yes": "Yes.", "no": "No.", "idk": "I don't know."}
@@ -159,21 +158,7 @@ def print_models() -> None:
     print(f"Newest: {models[-1][1]}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-
-    if args.list_models:
-        print_models()
-        return 0
-
-    if args.list_audio_devices:
-        try:
-            print(format_audio_devices())
-        except ImportError as exc:
-            print(missing_dependency_error(exc), file=sys.stderr)
-            return 1
-        return 0
-
+def run_voice(args: argparse.Namespace) -> int:
     try:
         model_dir = resolve_model_dir(args.model, args.model_dir)
     except FileNotFoundError as exc:
@@ -206,17 +191,18 @@ def main(argv: list[str] | None = None) -> int:
         output_device=args.output_device,
     )
 
+    # Fail fast on an unusable microphone, before any large model download.
+    try:
+        recorder.calibrate()
+    except AudioError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
     print(f"Loading speech models (first run downloads into {MODELS_ROOT})...")
     try:
         transcriber.ensure_loaded()
         speaker.ensure_loaded()
     except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
-    try:
-        recorder.calibrate()
-    except AudioError as exc:
         print(exc, file=sys.stderr)
         return 1
 
@@ -226,6 +212,29 @@ def main(argv: list[str] | None = None) -> int:
     except (AudioError, RuntimeError) as exc:
         print(exc, file=sys.stderr)
         return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    try:
+        if args.list_models:
+            print_models()
+            return 0
+
+        if args.list_audio_devices:
+            try:
+                print(format_audio_devices())
+            except AudioError as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            return 0
+
+        return run_voice(args)
+    except KeyboardInterrupt:
+        print()
+        print("Goodbye.")
+        return 130
 
 
 if __name__ == "__main__":

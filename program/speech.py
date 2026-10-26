@@ -70,6 +70,8 @@ class Transcriber:
                     compute_type="int8",
                     download_root=str(self.download_root),
                 )
+                self.device = "cpu"
+                self.compute_type = "int8"
             except Exception as retry_exc:
                 raise RuntimeError(
                     f"Could not load Whisper model '{self.model_name}' on CPU: "
@@ -115,13 +117,13 @@ class Speaker:
         if self._voice is not None:
             return
 
-        self.download_root.mkdir(parents=True, exist_ok=True)
-
         try:
             from piper.download_voices import download_voice
             from piper.voice import PiperVoice
         except ImportError as exc:
             raise missing_dependency_error(exc) from exc
+
+        self.download_root.mkdir(parents=True, exist_ok=True)
 
         model_path = self.download_root / f"{self.voice}.onnx"
         config_path = self.download_root / f"{self.voice}.onnx.json"

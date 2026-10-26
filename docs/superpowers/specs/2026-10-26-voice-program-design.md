@@ -1,7 +1,7 @@
 # Bit voice program — design
 
 Date: 2026-10-26
-Status: awaiting approval
+Status: approved
 
 ## Intent
 

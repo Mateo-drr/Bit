@@ -122,12 +122,14 @@ Useful options:
 - `--list-models` — list available checkpoints and show the newest one
 - `--list-audio-devices` — show microphone and speaker device indexes
 - `--input-device INDEX` / `--output-device INDEX` — choose specific devices
+- `--device DEVICE` — Torch/Whisper device, for example `auto`, `cuda`, or `cpu` (default `auto`)
 - `--asr-model NAME` — Whisper model (default `small.en`)
 - `--tts-voice NAME` — Piper voice (default `en_US-lessac-medium`)
+- `--threshold RMS` — fixed speech threshold; omit to calibrate from ambient noise
 - `--silence-seconds SECONDS` — stop recording after this much silence (default `0.8`)
 - `--max-seconds SECONDS` — maximum recording length (default `15.0`)
 
-The first run downloads Whisper and Piper assets into `program/models/`. Everything runs locally; nothing is sent to a cloud service.
+The first run downloads the ModernBERT backbone into `program/models/huggingface/` and Whisper and Piper assets into `program/models/`. Everything runs locally; nothing is sent to a cloud service. If the system default microphone cannot capture at 16 kHz, run `--list-audio-devices` and choose a working input with `--input-device INDEX`.
 
 ## Tests
 

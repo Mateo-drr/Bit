@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+from types import ModuleType
 from typing import Iterable, Iterator
 
 import numpy as np
@@ -12,9 +13,48 @@ BLOCK_SIZE = 512
 MIN_THRESHOLD = 0.01
 NOISE_MULTIPLIER = 3.0
 
+INPUT_DEVICE_HINT = (
+    "Run `python -m program.voice_chat --list-audio-devices` to list input "
+    "devices, then pass `--input-device INDEX`. The system default device may "
+    "not support 16 kHz capture."
+)
+OUTPUT_DEVICE_HINT = (
+    "Run `python -m program.voice_chat --list-audio-devices` to list output "
+    "devices, then pass `--output-device INDEX`."
+)
+
 
 class AudioError(RuntimeError):
-    """Raised when the microphone cannot be opened."""
+    """Raised when audio devices or dependencies cannot be used."""
+
+
+def _sounddevice() -> ModuleType:
+    """Import sounddevice, converting a partial install into an AudioError."""
+    try:
+        import sounddevice as sd
+    except ImportError as exc:
+        from program.config import VOICE_INSTALL_HINT
+
+        raise AudioError(f"{VOICE_INSTALL_HINT}\nOriginal error: {exc}") from exc
+    return sd
+
+
+def _device_name(device: int | None) -> str:
+    return "default" if device is None else str(device)
+
+
+def _microphone_error(device: int | None, exc: Exception) -> AudioError:
+    return AudioError(
+        f"Could not open microphone device {_device_name(device)}: {exc}\n"
+        f"{INPUT_DEVICE_HINT}"
+    )
+
+
+def _playback_error(device: int | None, exc: Exception) -> AudioError:
+    return AudioError(
+        f"Could not play audio on output device {_device_name(device)}: {exc}\n"
+        f"{OUTPUT_DEVICE_HINT}"
+    )
 
 
 @dataclass(frozen=True)
@@ -82,8 +122,6 @@ def record_blocks(
             break
 
     threshold = calibrate_threshold(calibration, settings)
-    if settings.threshold is not None:
-        threshold = settings.threshold
 
     preroll: deque[np.ndarray] = deque(maxlen=settings.preroll_blocks)
     if settings.preroll_blocks > 0:
@@ -154,7 +192,7 @@ class Recorder:
             self._threshold = settings.threshold
             return
 
-        import sounddevice as sd
+        sd = _sounddevice()
 
         count = calibration_block_count(settings)
         try:
@@ -168,9 +206,7 @@ class Recorder:
                 stream_blocks = read_blocks(stream, settings.block_size)
                 calibration = [next(stream_blocks) for _ in range(count)]
         except sd.PortAudioError as exc:
-            raise AudioError(
-                f"Could not open microphone device {self._device_name()}: {exc}"
-            ) from exc
+            raise _microphone_error(self.device, exc) from exc
 
         self._threshold = calibrate_threshold(calibration, settings)
 
@@ -178,7 +214,7 @@ class Recorder:
         if self._threshold is None:
             self.calibrate()
 
-        import sounddevice as sd
+        sd = _sounddevice()
 
         settings = replace(self.settings, threshold=self._threshold)
         try:
@@ -193,12 +229,7 @@ class Recorder:
                     read_blocks(stream, settings.block_size), settings
                 )
         except sd.PortAudioError as exc:
-            raise AudioError(
-                f"Could not open microphone device {self._device_name()}: {exc}"
-            ) from exc
-
-    def _device_name(self) -> str:
-        return "default" if self.device is None else str(self.device)
+            raise _microphone_error(self.device, exc) from exc
 
 
 def play(audio: np.ndarray, sample_rate: int, device: int | None = None) -> None:
@@ -206,18 +237,26 @@ def play(audio: np.ndarray, sample_rate: int, device: int | None = None) -> None
     if samples.size == 0:
         return
 
-    import sounddevice as sd
+    sd = _sounddevice()
 
-    sd.play(samples, samplerate=sample_rate, device=device)
-    sd.wait()
+    try:
+        sd.play(samples, samplerate=sample_rate, device=device)
+        sd.wait()
+    except sd.PortAudioError as exc:
+        raise _playback_error(device, exc) from exc
 
 
 def format_audio_devices() -> str:
-    import sounddevice as sd
+    sd = _sounddevice()
 
-    default_input, default_output = sd.default.device
+    try:
+        default_input, default_output = sd.default.device
+        devices = list(sd.query_devices())
+    except sd.PortAudioError as exc:
+        raise AudioError(f"Could not query audio devices: {exc}") from exc
+
     lines = []
-    for index, device in enumerate(sd.query_devices()):
+    for index, device in enumerate(devices):
         line = (
             f"{index}: {device['name']} "
             f"in={device['max_input_channels']} "

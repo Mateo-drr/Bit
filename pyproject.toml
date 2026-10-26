@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 voice = [
+    "numpy==2.5.4",
     "sounddevice==0.5.6",
     "faster-whisper==1.2.1",
     "piper-tts==1.8.0",
