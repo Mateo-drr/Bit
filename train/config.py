@@ -25,12 +25,13 @@ class TrainConfig:
     grad_accum_steps: int = 2
 
     learning_rate: float = 1e-3
-    bert_learning_rate: float | None = 1e-6  # freeze BERT completely
+    bert_learning_rate: float | None = 1e-5  # freeze BERT completely
     weight_decay: float = 0.2
     max_grad_norm: float = 1.0
     label_smoothing: float = 0.05
 
-    head_hidden_dims: int = 128
+    head_hidden_dims: int = 64
+    dropout: float = 0.2
 
     num_workers: int = 4
     log_every: int = 1

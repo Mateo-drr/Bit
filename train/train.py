@@ -166,6 +166,7 @@ def main() -> None:
         model_name=config.model_name,
         num_labels=len(config.labels),
         hid_dim=config.head_hidden_dims,
+        dropout=config.dropout
     ).to(device)
 
     head_params = [p for n, p in model.named_parameters() if not n.startswith("bert.")]
@@ -184,6 +185,7 @@ def main() -> None:
         f"Train rows: {len(train_dataset)} | Dev rows: {len(dev_dataset)} | "
         f"Epochs: {config.epochs} | Optimizer steps: {total_steps}"
     )
+    print(model)
 
     best_f1, best_loss, best_epoch = -1.0, float("inf"), 0
 

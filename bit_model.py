@@ -8,8 +8,8 @@ from transformers import AutoModel
 class MishGLU(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, hid_dim: int):
         super().__init__()
-        self.mish = nn.Mish()
         self.lin1 = nn.Linear(in_dim, hid_dim)
+        self.mish = nn.Mish()
         self.lin2 = nn.Linear(in_dim, hid_dim)
         self.out = nn.Linear(hid_dim, out_dim)
 
@@ -25,6 +25,7 @@ class BitClassifier(nn.Module):
         model_name: str,
         num_labels: int,
         hid_dim: int,
+        dropout: float = 0.0,
         glu_hid_dim: int | None = None,
         pooling: str = "mean",
     ) -> None:
@@ -34,8 +35,10 @@ class BitClassifier(nn.Module):
         h = self.bert.config.hidden_size
         glu_hid_dim = hid_dim if glu_hid_dim is None else glu_hid_dim
         self.mlp = nn.Sequential(
+            nn.Dropout(p=dropout),
             MishGLU(h, hid_dim, glu_hid_dim),
             nn.Mish(),
+            nn.Dropout(p=dropout),
             MishGLU(hid_dim, num_labels, glu_hid_dim),
         )
 
