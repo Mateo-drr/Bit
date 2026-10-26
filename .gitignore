@@ -4,5 +4,6 @@ __pycache__/
 *.py[cod]
 data/
 models/
+program/models/
 bit.egg-info/
 wandb/

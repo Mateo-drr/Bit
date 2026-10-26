@@ -15,10 +15,18 @@ dependencies = [
     "wandb",
 ]
 
+[project.optional-dependencies]
+voice = [
+    "sounddevice==0.5.6",
+    "faster-whisper==1.2.1",
+    "piper-tts==1.8.0",
+]
+
 [project.scripts]
 bit-train = "train.train:train"
 bit-chat = "chat.chat:main"
+bit-voice = "program.voice_chat:main"
 
 [tool.setuptools]
 py-modules = ["bit_model"]
-packages = ["train", "chat"]
+packages = ["train", "chat", "program"]
