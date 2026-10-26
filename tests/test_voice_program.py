@@ -5,12 +5,15 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
 import program
-from program import config
+from program import config, speech
 from program.audio import RecordSettings, record_blocks
+from program.speech import Speaker, Transcriber
 
 
 class ConfigTests(unittest.TestCase):
@@ -150,6 +153,88 @@ class AudioTests(unittest.TestCase):
         )
         audio = record_blocks(blocks, settings)
         self.assertEqual(audio.size, 0)
+
+
+class FakeWhisperModel:
+    def __init__(self, segments):
+        self.segments = segments
+        self.kwargs = None
+
+    def transcribe(self, audio, **kwargs):
+        self.kwargs = kwargs
+        return iter(self.segments), SimpleNamespace(language="en")
+
+
+class SpeechTests(unittest.TestCase):
+    def test_missing_dependency_error_includes_install_hint(self):
+        error = speech.missing_dependency_error(ImportError("nope"))
+        self.assertIn("pip install -e '.[voice]'", str(error))
+        self.assertIn("nope", str(error))
+
+    def test_transcriber_joins_segments_and_uses_english_vad(self):
+        model = FakeWhisperModel(
+            [
+                SimpleNamespace(text=" Hello "),
+                SimpleNamespace(text="world "),
+                SimpleNamespace(text=" "),
+            ]
+        )
+        transcriber = Transcriber()
+        transcriber._model = model
+        transcript = transcriber.transcribe(np.zeros(1600, dtype=np.float32))
+        self.assertEqual(transcript, "Hello world")
+        self.assertEqual(model.kwargs["language"], "en")
+        self.assertTrue(model.kwargs["vad_filter"])
+        self.assertFalse(model.kwargs["condition_on_previous_text"])
+
+    def test_transcriber_falls_back_to_cpu_when_gpu_load_fails(self):
+        calls = []
+
+        def factory(name, *, device, compute_type, download_root):
+            calls.append((device, compute_type))
+            if device != "cpu":
+                raise RuntimeError("CUDA unavailable")
+            return FakeWhisperModel([])
+
+        transcriber = Transcriber(device="auto", model_factory=factory)
+        transcriber.ensure_loaded()
+        self.assertEqual(calls, [("auto", "default"), ("cpu", "int8")])
+
+    def test_speaker_concatenates_chunks(self):
+        voice = SimpleNamespace(
+            synthesize=lambda text: iter(
+                [
+                    SimpleNamespace(
+                        audio_float_array=np.array(
+                            [0.1, -0.1], dtype=np.float32
+                        ),
+                        sample_rate=22050,
+                    ),
+                    SimpleNamespace(
+                        audio_float_array=np.array([0.2], dtype=np.float32),
+                        sample_rate=22050,
+                    ),
+                ]
+            )
+        )
+        speaker = Speaker()
+        speaker._voice = voice
+        audio, sample_rate = speaker.synthesize("Yes.")
+        np.testing.assert_allclose(audio, [0.1, -0.1, 0.2])
+        self.assertEqual(sample_rate, 22050)
+
+    def test_speaker_plays_synthesized_audio(self):
+        speaker = Speaker(output_device=3)
+        speaker.synthesize = mock.Mock(
+            return_value=(np.array([0.5], dtype=np.float32), 22050)
+        )
+        with mock.patch("program.speech.play") as play:
+            speaker.speak("Yes.")
+        play.assert_called_once()
+        audio, sample_rate = play.call_args.args
+        np.testing.assert_allclose(audio, [0.5])
+        self.assertEqual(sample_rate, 22050)
+        self.assertEqual(play.call_args.kwargs["device"], 3)
 
 
 if __name__ == "__main__":
