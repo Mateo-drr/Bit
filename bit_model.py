@@ -20,35 +20,22 @@ class MishGLU(nn.Module):
 
 
 class BitClassifier(nn.Module):
-    def __init__(
-        self,
-        model_name: str,
-        num_labels: int,
-        hidden_dims: tuple[int, ...] = (512,),
-    ) -> None:
+    def __init__(self, model_name: str, num_labels: int, hid_dim: int, pooling: str = "mean") -> None:
         super().__init__()
-        self.bert = AutoModel.from_pretrained(model_name)
-        bert_hidden = self.bert.config.hidden_size
-        h = hidden_dims[0] if hidden_dims else bert_hidden
-
+        self.bert = AutoModel.from_pretrained(model_name)  # e.g. "answerdotai/ModernBERT-base"
+        self.pooling = pooling
+        h = self.bert.config.hidden_size
         self.mlp = nn.Sequential(
-            MishGLU(bert_hidden, h, h * 2),
+            MishGLU(h, hid_dim, hid_dim),
             nn.Mish(),
-            MishGLU(h, num_labels, h * 2),
+            MishGLU(hid_dim, num_labels, hid_dim),
         )
 
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        token_type_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-        )
-        pooled = outputs.pooler_output
-        if pooled is None:
-            pooled = outputs.last_hidden_state[:, 0]
+    def forward(self, input_ids, attention_mask=None, **kwargs):
+        hs = self.bert(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        if self.pooling == "cls" or attention_mask is None:
+            pooled = hs[:, 0]
+        else:
+            m = attention_mask.unsqueeze(-1).to(hs.dtype)
+            pooled = (hs * m).sum(1) / m.sum(1).clamp(min=1)
         return self.mlp(pooled)

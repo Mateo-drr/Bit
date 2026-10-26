@@ -7,7 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from bit_model import BitClassifier
-from chat.config import ChatConfig
+from chat.config import ChatConfig, list_available_models
 
 
 def resolve_device(requested: str) -> torch.device:
