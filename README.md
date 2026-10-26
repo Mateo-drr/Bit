@@ -84,6 +84,51 @@ Interactive commands:
 
 Chat settings live in `ChatConfig` in `chat/config.py`.
 
+## Voice Chat
+
+Talk to Bit through your microphone. Install the optional voice dependencies:
+
+```bash
+pip install -e '.[voice]'
+```
+
+Start the voice chat:
+
+```bash
+python -m program.voice_chat
+# or
+bit-voice
+```
+
+Speak the context and question together as one utterance, for example:
+
+```text
+Paris is the capital of France. Is Paris in France?
+```
+
+The terminal shows the transcript and Bit's answer, then the machine speaks it:
+
+```text
+You: Paris is the capital of France. Is Paris in France?
+Bit: yes (0.956)
+```
+
+The spoken answer is one of “Yes.”, “No.”, or “I don't know.” Say `quit`, `exit`, or `stop` to leave.
+
+By default the voice chat loads the newest checkpoint in `models/`. Use `--model` to pick a model by directory name or `--model-dir` to load a specific path.
+
+Useful options:
+
+- `--list-models` — list available checkpoints and show the newest one
+- `--list-audio-devices` — show microphone and speaker device indexes
+- `--input-device INDEX` / `--output-device INDEX` — choose specific devices
+- `--asr-model NAME` — Whisper model (default `small.en`)
+- `--tts-voice NAME` — Piper voice (default `en_US-lessac-medium`)
+- `--silence-seconds SECONDS` — stop recording after this much silence (default `0.8`)
+- `--max-seconds SECONDS` — maximum recording length (default `15.0`)
+
+The first run downloads Whisper and Piper assets into `program/models/`. Everything runs locally; nothing is sent to a cloud service.
+
 ## Tests
 
 ```bash
@@ -102,8 +147,15 @@ chat/
   config.py           Chat and inference settings
   model.py            Checkpoint loading and inference wrapper
   chat.py             Interactive chat and one-shot CLI
+program/
+  config.py           Local model roots and checkpoint resolution
+  audio.py            Silence-aware microphone capture and playback
+  speech.py           Whisper transcription and Piper speech synthesis
+  voice_chat.py       Voice conversation loop and CLI
 tests/
   test_core.py        Text building and label mapping tests
+  test_chat.py        Chat CLI and model loading tests
+  test_voice_program.py  Voice program config, audio, speech, and chat tests
 ```
 
 ## Notes

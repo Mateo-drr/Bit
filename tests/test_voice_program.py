@@ -14,6 +14,12 @@ import program
 from program import config, speech
 from program.audio import RecordSettings, record_blocks
 from program.speech import Speaker, Transcriber
+from program.voice_chat import (
+    build_parser,
+    conversation_loop,
+    is_quit_command,
+    spoken_answer,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -235,6 +241,129 @@ class SpeechTests(unittest.TestCase):
         np.testing.assert_allclose(audio, [0.5])
         self.assertEqual(sample_rate, 22050)
         self.assertEqual(play.call_args.kwargs["device"], 3)
+
+
+class FakeRecorder:
+    def __init__(self, recordings):
+        self._recordings = iter(recordings)
+
+    def record(self):
+        return next(self._recordings)
+
+
+class FakeTranscriber:
+    def __init__(self, transcripts):
+        self._transcripts = iter(transcripts)
+
+    def transcribe(self, audio):
+        return next(self._transcripts)
+
+
+class FakeSpeaker:
+    def __init__(self):
+        self.spoken = []
+
+    def speak(self, text):
+        self.spoken.append(text)
+
+
+class FakeBit:
+    def __init__(self):
+        self.questions = []
+
+    def predict(self, text):
+        self.questions.append(text)
+        return {
+            "label": "yes",
+            "confidence": 0.9,
+            "probabilities": {"yes": 0.9, "no": 0.05, "idk": 0.05},
+        }
+
+
+AUDIO = np.ones(1600, dtype=np.float32)
+
+
+class VoiceChatTests(unittest.TestCase):
+    def test_spoken_answer_maps_known_and_unknown_labels(self):
+        self.assertEqual(spoken_answer("yes"), "Yes.")
+        self.assertEqual(spoken_answer(" NO "), "No.")
+        self.assertEqual(spoken_answer("idk"), "I don't know.")
+        self.assertEqual(spoken_answer("maybe"), "I don't know.")
+
+    def test_is_quit_command_accepts_spoken_stop_words(self):
+        for text in ("quit", "Exit.", " stop ", "STOP!"):
+            self.assertTrue(is_quit_command(text))
+        for text in ("stop the car", "stopping", ""):
+            self.assertFalse(is_quit_command(text))
+
+    def test_conversation_loop_prints_and_speaks_answer(self):
+        bit = FakeBit()
+        speaker = FakeSpeaker()
+        lines = []
+        result = conversation_loop(
+            bit,
+            FakeRecorder([AUDIO, AUDIO]),
+            FakeTranscriber(["Paris is in France. Is Paris in France?", "quit"]),
+            speaker,
+            output=lines.append,
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("You: Paris is in France. Is Paris in France?", lines)
+        self.assertIn("Bit: yes (0.900)", lines)
+        self.assertEqual(speaker.spoken, ["Yes."])
+        self.assertEqual(
+            bit.questions, ["Paris is in France. Is Paris in France?"]
+        )
+        self.assertEqual(lines[-1], "Goodbye.")
+
+    def test_conversation_loop_retries_on_empty_transcript(self):
+        speaker = FakeSpeaker()
+        lines = []
+        conversation_loop(
+            FakeBit(),
+            FakeRecorder([AUDIO, AUDIO]),
+            FakeTranscriber(["", "quit"]),
+            speaker,
+            output=lines.append,
+        )
+        self.assertIn("I couldn't understand that. Try again.", lines)
+        self.assertEqual(speaker.spoken, [])
+
+    def test_conversation_loop_retries_on_empty_audio(self):
+        lines = []
+        conversation_loop(
+            FakeBit(),
+            FakeRecorder([np.zeros(0, dtype=np.float32), AUDIO]),
+            FakeTranscriber(["quit"]),
+            FakeSpeaker(),
+            output=lines.append,
+        )
+        self.assertIn("I didn't hear anything. Try again.", lines)
+
+    def test_conversation_loop_handles_keyboard_interrupt(self):
+        class InterruptingRecorder:
+            def record(self):
+                raise KeyboardInterrupt
+
+        lines = []
+        result = conversation_loop(
+            FakeBit(),
+            InterruptingRecorder(),
+            FakeTranscriber([]),
+            FakeSpeaker(),
+            output=lines.append,
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(lines[-1], "Goodbye.")
+
+    def test_parser_defaults(self):
+        args = build_parser().parse_args([])
+        self.assertEqual(args.asr_model, "small.en")
+        self.assertEqual(args.tts_voice, "en_US-lessac-medium")
+        self.assertEqual(args.device, "auto")
+        self.assertAlmostEqual(args.silence_seconds, 0.8)
+        self.assertAlmostEqual(args.max_seconds, 15.0)
+        self.assertIsNone(args.threshold)
 
 
 if __name__ == "__main__":
