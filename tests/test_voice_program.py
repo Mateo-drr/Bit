@@ -6,8 +6,11 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 import program
 from program import config
+from program.audio import RecordSettings, record_blocks
 
 
 class ConfigTests(unittest.TestCase):
@@ -92,6 +95,61 @@ class ConfigTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.stdout.strip(), str(config.HF_ROOT))
+
+
+def make_blocks(seconds, amplitude, settings):
+    count = round(seconds / settings.block_seconds)
+    return [
+        np.full(settings.block_size, amplitude, dtype=np.float32)
+        for _ in range(count)
+    ]
+
+
+class AudioTests(unittest.TestCase):
+    def test_record_blocks_captures_speech_and_stops_after_silence(self):
+        settings = RecordSettings(
+            threshold=0.05, silence_seconds=0.2, max_seconds=5.0
+        )
+        blocks = (
+            make_blocks(0.16, 0.0, settings)
+            + make_blocks(0.2, 0.2, settings)
+            + make_blocks(0.5, 0.0, settings)
+        )
+        audio = record_blocks(blocks, settings)
+        duration = len(audio) / settings.sample_rate
+        self.assertGreaterEqual(duration, 0.4)
+        self.assertLessEqual(duration, 0.8)
+        self.assertGreater(float(np.max(np.abs(audio))), 0.1)
+
+    def test_record_blocks_returns_empty_without_speech(self):
+        settings = RecordSettings(
+            threshold=0.05, silence_seconds=0.2, max_seconds=0.5
+        )
+        audio = record_blocks(make_blocks(1.0, 0.0, settings), settings)
+        self.assertEqual(audio.size, 0)
+
+    def test_record_blocks_stops_at_max_seconds(self):
+        settings = RecordSettings(
+            threshold=0.05, silence_seconds=1.0, max_seconds=0.64
+        )
+        audio = record_blocks(make_blocks(2.0, 0.2, settings), settings)
+        duration = len(audio) / settings.sample_rate
+        self.assertGreaterEqual(duration, 0.5)
+        self.assertLessEqual(
+            duration, settings.max_seconds + settings.block_seconds
+        )
+
+    def test_record_blocks_calibrates_threshold_from_noise(self):
+        settings = RecordSettings(
+            threshold=None, silence_seconds=0.2, max_seconds=2.0
+        )
+        blocks = (
+            make_blocks(0.4, 0.05, settings)
+            + make_blocks(0.3, 0.1, settings)
+            + make_blocks(0.5, 0.0, settings)
+        )
+        audio = record_blocks(blocks, settings)
+        self.assertEqual(audio.size, 0)
 
 
 if __name__ == "__main__":
