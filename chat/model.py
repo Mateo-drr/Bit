@@ -7,7 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 from bit_model import BitClassifier
-from chat.config import ChatConfig, list_available_models
+from chat.config import ChatConfig
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -33,15 +33,15 @@ class Bit:
         self.device = resolve_device(config.device)
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
         self.tokenizer.truncation_side = config.truncation_side
-        self.model = BitClassifier(
-            model_name=metadata["model_name"],
-            num_labels=len(self.labels),
-            hidden_dims=tuple(metadata["head_hidden_dims"]),
-        )
         state_dict = torch.load(
             weights_path,
             map_location=self.device,
             weights_only=True,
+        )
+        self.model = BitClassifier.from_state_dict(
+            state_dict,
+            model_name=metadata["model_name"],
+            pooling=metadata.get("pooling", "mean"),
         )
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
